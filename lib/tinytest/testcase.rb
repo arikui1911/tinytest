@@ -34,10 +34,6 @@ module TinyTest
       list.shuffle
     end
     
-    def initialize
-      super
-    end
-    
     # test API: describe preparation for tests
     def setup
     end

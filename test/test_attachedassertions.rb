@@ -67,6 +67,4 @@ class TC_attachedassertions < Test::Unit::TestCase
     o = TestReferToAssertion.new
     assert o.refer_to_assertion?("lib/tinytest/assertions.rb:in `assert_foobar'")
   end
-  
-  
 end

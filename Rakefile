@@ -1,9 +1,3 @@
-def if_require(feature)
-  require feature
-  yield
-rescue LoadError
-end
-
 require 'rake/testtask'
 Rake::TestTask.new do |t|
   t.warning = true
