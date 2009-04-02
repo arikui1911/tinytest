@@ -12,14 +12,59 @@ unless feature.include?('/') || feature.include?('\\')
 end
 TINYTEST_FEATURE = feature
 
+unless Object.method_defined?(:tap)
+  class Object
+    def tap
+      yield(self)
+      self
+    end
+  end
+end
 
-class Array
-  unless method_defined?(:sample)
+unless Array.method_defined?(:shuffle)
+  class Array
+    def shuffle
+      sort_by{ rand }
+    end
+    
+    def shuffle!
+      shuffle.each_with_index{|e, i| self[i] = e }
+      self
+    end
+  end
+end
+
+
+unless Array.method_defined?(:sample)
+  class Array
     def sample
       shuffle.first
     end
   end
 end
+
+unless Enumerable.method_defined?(:drop)
+  module Enumerable
+    def drop(n)
+      raise ArgumentError, 'attempt to drop negative size' if n < 0
+      rest = []
+      each_with_index do |item, i|
+        next unless i >= n
+        rest << item
+      end
+      rest
+    end
+  end
+end
+
+unless Symbol.method_defined?(:to_proc)
+  class Symbol
+    def to_proc
+      proc{|receiver, *args| receiver.__send__(self, *args) }
+    end
+  end
+end
+
 
 module TestUtil
   def positive_integer_cases(limit)
@@ -365,7 +410,7 @@ class TC_Reporter < Test::Unit::TestCase
     n = positive_integer_cases(9).last
     results = Array.new(n){ SuiteResultMock.new }
     @r.error_reports(results)
-    expected = n.times.map{|i| "\n  #{i.succ}) REPORT\n\n" }.join('')
+    expected = Array.new(n){|i| "\n  #{i.succ}) REPORT\n\n" }.join('')
     assert_equal expected, @f.string
   end
   
@@ -378,9 +423,9 @@ end
 
 class MockTestCase
   def self.def_hist_method(name, &body)
-    define_method name do |*args, &block|
+    define_method name do |*args|
       history << name
-      body.yield(*args, &block) if body
+      body.yield(*args) if body
     end
   end
   
@@ -827,7 +872,7 @@ class TC_TestCase_assertions < Test::Unit::TestCase
       @tc.assert_same :hoge, :hoge
     end
     if_flunk "assert_same seems to contain bug." do
-      expected, actual = 2.times.map{ Object.new }
+      expected, actual = Array.new(2){ Object.new }
       default = sprintf(
         "Expected %s (0x%x) to be the same as %s (0x%x).",
         expected.inspect, expected.object_id,
@@ -844,7 +889,7 @@ class TC_TestCase_assertions < Test::Unit::TestCase
   
   def test_refute_same
     assert_nothing_raised TinyTest::AssertError do
-      @tc.refute_same *2.times.map{ Object.new }
+      @tc.refute_same *Array.new(2){ Object.new }
     end
     if_flunk "refute_same seems to contain bug." do
       default = "Expected :hoge to not be the same as :hoge."

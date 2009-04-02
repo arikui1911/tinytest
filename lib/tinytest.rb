@@ -144,7 +144,7 @@ module TinyTest
     end
     
     def error_reports(not_succeeded_results)
-      not_succeeded_results.each.with_index do |r, i|
+      not_succeeded_results.each_with_index do |r, i|
         blank
         @f.puts "%3d) #{r.report}" % i.succ
         blank
