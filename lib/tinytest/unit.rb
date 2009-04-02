@@ -5,43 +5,46 @@
 # All rights reserved.
 # 
 
-require 'tinytest/testrunner'
-require 'tinytest/testcase'
+require 'tinytest'
+require 'optparse'
 
-# Manage ordinary TinyTest's running.
-# 
 module TinyTest::Unit
-  TinyTest::TestCase.testcases_container_caller do
-    self.testrunner.testcases
-  end
-  
-  # Readable attribute.
-  # But be refered without assignning beforehand, this attribute
-  # initialized as TinyTest::TestRunner object.
-  # 
-  def self.testrunner
-    @testrunner ||= TinyTest::TestRunner.new
-  end
-  
-  # Writable attribute.
-  # 
-  def self.testrunner=(runner)
-    @testrunner = runner
-  end
-  
-  # A first time to be called, add hook to run tests at exit.
-  # Returns a callback Proc for the hook.
-  # -> Proc
-  # 
   def self.autorun
-    @autorunner ||= add_hock_at_exit()
+    @autorunner ||= autorunner()
   end
   
-  def self.add_hock_at_exit
-    at_exit do
-      status = testrunner.run(ARGV)
-      exit false if status && status != 0
-    end
+  def self.autorun?
+    @autorunner ? true : false
   end
-  private_class_method :add_hock_at_exit
+  
+  def self.autorunner
+    @autorunner = at_exit{
+      runner = parse_options(ARGV)
+      runner.run
+    }
+  end
+  private_class_method :autorunner
+  
+  def self.parse_options(argv)
+    opts = {}
+    o = OptionParser.new
+    o.banner = "== TinyTest autorunner ==\n"
+    o.banner << "Usage: test-script [options]\n"
+    o.on('-n', '--testname=NAME', 'assign testname matcher') do |s|
+      opts[:testname] = Regexp.new(s)
+    end
+    o.on('-t', '--testcase=NAME', 'assign testcase matcher') do |s|
+      opts[:testcase] = Regexp.new(s)
+    end
+    o.on('-I', '--load-path=DIR', 'add to ruby load-path') do |s|
+      $LOAD_PATH.push s
+    end
+    o.on('-v', '--[no-]verbose', 'turn on/off verbose mode') do |b|
+      opts[:verbose] = b
+    end
+    o.parse! argv
+    TinyTest::Runner.new(opts)
+  end
+  private_class_method :parse_options
 end
+
