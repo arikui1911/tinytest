@@ -12,65 +12,26 @@ unless feature.include?('/') || feature.include?('\\')
 end
 TINYTEST_FEATURE = feature
 
-unless Object.method_defined?(:tap)
-  class Object
-    def tap
-      yield(self)
-      self
-    end
-  end
-end
-
-unless Array.method_defined?(:shuffle)
-  class Array
-    def shuffle
-      sort_by{ rand }
-    end
-    
-    def shuffle!
-      shuffle.each_with_index{|e, i| self[i] = e }
-      self
-    end
-  end
-end
-
-
-unless Array.method_defined?(:sample)
-  class Array
-    def sample
-      shuffle.first
-    end
-  end
-end
-
-unless Enumerable.method_defined?(:drop)
-  module Enumerable
-    def drop(n)
-      raise ArgumentError, 'attempt to drop negative size' if n < 0
-      rest = []
-      each_with_index do |item, i|
-        next unless i >= n
-        rest << item
-      end
-      rest
-    end
-  end
-end
-
-unless Symbol.method_defined?(:to_proc)
-  class Symbol
-    def to_proc
-      proc{|receiver, *args| receiver.__send__(self, *args) }
-    end
-  end
-end
-
-
 module TestUtil
   def positive_integer_cases(limit)
-    [0, 1, [*2..limit].sample]
+    [0, 1, TestUtil.sample([*2..limit])]
   end
   module_function :positive_integer_cases
+  
+  def shuffle(collection)
+    collection.sort_by{ rand }
+  end
+  module_function :shuffle
+  
+  def sample(collection)
+    TestUtil.shuffle(collection).first
+  end
+  module_function :sample
+  
+  def start_with?(str, tgt)
+    i = str.index(tgt) and i == 0 ? true : false
+  end
+  module_function :start_with?
 end
 
 class TC_AssertError < Test::Unit::TestCase
@@ -158,9 +119,21 @@ class TC_Runner < Test::Unit::TestCase
   end
   
   def test_run_with_errors
-    results = Array.new(5){ Object.new.tap{|o| def o.success?() true end } }
-    results.concat Array.new(5){ Object.new.tap{|o| def o.success?() false end } }
-    results.shuffle!
+    results = Array.new(5){
+      o = Object.new
+      def o.success?
+        true
+      end
+      o
+    }
+    results = Array.new(5){
+      o = Object.new
+      def o.success?
+        false
+      end
+      o
+    }
+    results = TestUtil.shuffle(results)
     not_succeededs = results.select{|r| not r.success? }
     repo = ReporterMock.new
     runner = TinyTest::Runner.new(:reporter => repo)
@@ -195,7 +168,6 @@ class TC_Runner_private < Test::Unit::TestCase
     end
     
     def execute
-      sleep 0.1
       'execute'
     end
   end
@@ -205,19 +177,18 @@ class TC_Runner_private < Test::Unit::TestCase
     n, results, bench = @runner.instance_eval{ run_suites(suites) }
     assert_equal 666 * 3, n
     assert_equal ['execute'] * 3, results
-    assert bench.real >= 0.3
   end
   
   def test_private_count_suiteresults_types
-    nums = Array.new(4){ [*1..10].sample }
+    nums = Array.new(4){ TestUtil.sample([*1..10]) }
     results = []
     klass = Struct.new(:char)
     %w[. F E S].zip(nums) do |c, n|
       results.concat Array.new(n){ klass.new(c) }
     end
-    results.shuffle!
+    results = TestUtil.shuffle(results)
     counts = @runner.instance_eval{ count_suiteresults_types(results) }
-    assert_equal nums.drop(1), counts
+    assert_equal nums[1..-1], counts
   end
 end
 
@@ -270,7 +241,7 @@ class TC_Runner_private_collect_suites < Test::Unit::TestCase
     runner.extend(EachClassMock)
     runner.class_list << ClassMock.new("Foo", :test_foo, :test_bar, :not_test_baz)
     suites = runner.instance_eval{ collect_suites() }
-    assert_equal symbol_set([:test_foo, :test_bar]), symbol_set(suites.map(&:testname))
+    assert_equal symbol_set([:test_foo, :test_bar]), symbol_set(suites.map{|s| s.testname })
   end
   
   def test_collect_suites_testname_matcher_re
@@ -278,16 +249,16 @@ class TC_Runner_private_collect_suites < Test::Unit::TestCase
     runner.extend(EachClassMock)
     runner.class_list << ClassMock.new("Foo", :test_foo, :prefix_bar, :prefix_baz)
     suites = runner.instance_eval{ collect_suites() }
-    assert_equal symbol_set([:prefix_bar, :prefix_baz]), symbol_set(suites.map(&:testname))
+    assert_equal symbol_set([:prefix_bar, :prefix_baz]), symbol_set(suites.map{|s| s.testname })
   end
   
   def test_collect_suites_testname_matcher_proc
-    matcher = lambda{|name| name.to_s.start_with?('prefix') }
+    matcher = lambda{|name| TestUtil.start_with?(name.to_s, 'prefix') }
     runner = TinyTest::Runner.new(:testname => matcher)
     runner.extend(EachClassMock)
     runner.class_list << ClassMock.new("Foo", :test_foo, :prefix_bar, :prefix_baz)
     suites = runner.instance_eval{ collect_suites() }
-    assert_equal symbol_set([:prefix_bar, :prefix_baz]), symbol_set(suites.map(&:testname))
+    assert_equal symbol_set([:prefix_bar, :prefix_baz]), symbol_set(suites.map{|s| s.testname })
   end
   
   def test_collect_suites_testcase_matcher_re
@@ -297,7 +268,7 @@ class TC_Runner_private_collect_suites < Test::Unit::TestCase
     runner.class_list << ClassMock.new("Bar", :test_bar_a, :test_bar_b, :not_test_bar_c)
     suites = runner.instance_eval{ collect_suites() }
     assert_equal Set.new(["TC_Foo"]), Set.new(suites.map{|s| s.testcase.name })
-    assert_equal symbol_set([:test_foo_a, :test_foo_b]), symbol_set(suites.map(&:testname))
+    assert_equal symbol_set([:test_foo_a, :test_foo_b]), symbol_set(suites.map{|s| s.testname })
   end
   
   def test_collect_suites_testcase_matcher_proc
@@ -309,7 +280,7 @@ class TC_Runner_private_collect_suites < Test::Unit::TestCase
     runner.class_list << ClassMock.new("Bar", :test_bar_a, :test_bar_b, :not_test_bar_c)
     suites = runner.instance_eval{ collect_suites() }
     assert_equal Set.new(["TC_Foo"]), Set.new(suites.map{|s| s.testcase.name })
-    assert_equal symbol_set([:test_foo_a, :test_foo_b]), symbol_set(suites.map(&:testname))
+    assert_equal symbol_set([:test_foo_a, :test_foo_b]), symbol_set(suites.map{|s| s.testname })
   end
 end
 
@@ -347,11 +318,10 @@ class TC_Reporter < Test::Unit::TestCase
       'REPORT'
     end
     
-    SUITE = Object.new.tap{|o|
-      def o.inspect
-        'INSPECTION'
-      end
-    }
+    SUITE = Object.new
+    def SUITE.inspect
+      'INSPECTION'
+    end
     
     def suite
       SUITE
@@ -425,7 +395,7 @@ class MockTestCase
   def self.def_hist_method(name, &body)
     define_method name do |*args|
       history << name
-      body.yield(*args) if body
+      body.call(*args) if body
     end
   end
   
@@ -515,27 +485,26 @@ class TC_Suite_assertioncount < Test::Unit::TestCase
       n.times{ @counter.succ_assertion_count }
       @counter.count_assertions{}
     }
-    assert_equal [0], [].tap{|results|
-      positive_integer_cases(10).each do |n|
-        results << do_count.call(n)
-        @counter.assertion_count_grouping{ results << do_count.call(n) }
-      end
-    }.uniq
+    results = []
+    positive_integer_cases(10).each do |n|
+      results << do_count.call(n)
+      @counter.assertion_count_grouping{ results << do_count.call(n) }
+    end
+    assert_equal [0], results.uniq
   end
   
   def test_count_assertions
-    positive_integer_cases(10).tap do |nums|
-      assert_equal nums, nums.map{|n|
-        @counter.count_assertions{ n.times{ @counter.succ_assertion_count } }
-      }
-    end
+    nums = positive_integer_cases(10)
+    assert_equal nums, nums.map{|n|
+      @counter.count_assertions{ n.times{ @counter.succ_assertion_count } }
+    }
   end
   
   def test_assertion_count_grouping
     assert_equal 0, @counter.count_assertions{
       @counter.assertion_count_grouping{}
     }
-    naturals = positive_integer_cases(10).drop(1)
+    naturals = positive_integer_cases(10)[1..-1]
     assert_equal [1], naturals.map{|n|
       @counter.count_assertions do
         @counter.assertion_count_grouping do
@@ -565,9 +534,8 @@ class TC_SuiteResult < Test::Unit::TestCase
   }
   
   def setup
-    @results = {}.tap{|h|
-      Reports.each{|k, v| h[k] = TinyTest::SuiteResult.new(:suite, :benchmark, v) }
-    }
+    @results = {}
+    Reports.each{|k, v| @results[k] = TinyTest::SuiteResult.new(:suite, :benchmark, v) }
   end
   
   def test_report
@@ -582,7 +550,8 @@ class TC_SuiteResult < Test::Unit::TestCase
   end
   
   def test_success?
-    others = Reports.keys.tap{|x| x.delete(:success) }
+    others = Reports.keys
+    others.delete(:success)
     others = others.map{|k| @results[k].success? }.uniq
     assert_equal [false], others
     assert @results[:success].success?
@@ -1195,7 +1164,7 @@ class TC_TestCase_assertions < Test::Unit::TestCase
         "Message: <MSG>\n",
         "---Backtrace---\n",
       ].join('')
-      expected << actual.backtrace.reject{|b| b.start_with?(TINYTEST_FEATURE) }.join("\n") << "\n"
+      expected << actual.backtrace.reject{|b| TestUtil.start_with?(b, TINYTEST_FEATURE) }.join("\n") << "\n"
       expected << "---------------"
       assert_equal expected, actual_message
     end
@@ -1232,7 +1201,7 @@ class TC_TestCase_assertions < Test::Unit::TestCase
         "Message: <MSG>\n",
         "---Backtrace---\n",
       ].join('')
-      expected << actual.backtrace.reject{|b| b.start_with?(TINYTEST_FEATURE) }.join("\n") << "\n"
+      expected << actual.backtrace.reject{|b| TestUtil.start_with?(b, TINYTEST_FEATURE) }.join("\n") << "\n"
       expected << "---------------"
       assert_equal expected, actual_message
     end

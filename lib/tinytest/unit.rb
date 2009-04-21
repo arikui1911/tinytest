@@ -9,16 +9,19 @@ require 'tinytest'
 require 'optparse'
 
 module TinyTest::Unit
+  # Add hook which allocate TinyTest::Runner with parsed ARGV and
+  # execute Runner#run at exit (Only wehn firstly called).
   def self.autorun
     @autorunner ||= autorunner()
   end
   
+  # Already set #autorun or not.
   def self.autorun?
     @autorunner ? true : false
   end
   
   def self.autorunner
-    @autorunner = at_exit{
+    at_exit{
       runner = parse_options(ARGV)
       runner.run
     }

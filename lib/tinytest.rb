@@ -6,7 +6,6 @@
 # 
 
 require 'benchmark'
-require 'tinytest/compat' unless RUBY_VERSION >= '1.9.1'
 
 module TinyTest
   # exception which express assertion.
@@ -22,6 +21,7 @@ module TinyTest
   class Runner
     # Receives _args_ as a keyword-argument-hash.
     # 
+    # [reporter] reporter, an object to respond to messages like TinyTest::Reporter.
     # [testname] matcher for testing method names.
     #            (Default; /\Atest/)
     # [testcase] matcher for TestCase's subclass names.
@@ -35,13 +35,10 @@ module TinyTest
     # 
     def initialize(args = {})
       @reporter = args.fetch(:reporter, Reporter.new)
-      @testname_matcher = args.fetch(:testname, /\Atest/)
+      tn_matcher = args.fetch(:testname, /\Atest/)
+      @testname_matcher = normalize_callable_matcher(tn_matcher)
       tc_matcher = args.fetch(:testcase, /./)
-      unless tc_matcher.respond_to?(:call)
-        @testcase_matcher = lambda{|klass| tc_matcher === klass.name }
-      else
-        @testcase_matcher = tc_matcher
-      end
+      @testcase_matcher = normalize_callable_matcher(tc_matcher){|klass| klass.name }
       self.verbose = args.fetch(:verbose, false)
     end
     
@@ -70,19 +67,25 @@ module TinyTest
     
     private
     
-    def each_class(root = nil)
+    def normalize_callable_matcher(matcher, &block)
+      return matcher if matcher.respond_to?(:call)
+      pattern = matcher
+      block_given? ? lambda{|arg| pattern =~ block.call(arg) } : lambda{|arg| pattern =~ arg }
+    end
+    
+    def each_class(root = TestCase)
       ObjectSpace.each_object(Class) do |c|
-        next unless c < root if root
+        next unless c < root
         yield(c)
       end
     end
     
     def collect_suites
       suites = []
-      each_class TestCase do |c|
-        next unless @testcase_matcher === c
+      each_class do |c|
+        next unless @testcase_matcher.call(c)
         c.public_instance_methods(true).each do |name|
-          suites << Suite.new(c.new, name) if @testname_matcher === name
+          suites << Suite.new(c.new, name) if @testname_matcher.call(name)
         end
       end
       suites
@@ -101,34 +104,43 @@ module TinyTest
     
     def count_suiteresults_types(results)
       results_chars = results.map{|r| r.char }
-      ['F', 'E', 'S'].map{|c| results_chars.count(c) }
+      counts = Hash.new(0)
+      results_chars.each{|c| counts[c] += 1 }
+      ['F', 'E', 'S'].map{|k| counts[k] }
     end
   end
   
+  # Make testing reports be abstructive.
   class Reporter
+    # _out_ is able to be duck-typed as IO.
     def initialize(out = $stdout)
       @f = out
     end
     
+    # Put separater blank.
     def blank
       @f.puts
     end
     
+    # Announce to start executing some tests of _script_ at first.
     def load_suite(script)
       @f.puts "Loaded suite #{script.sub(/\.rb\Z/, '')}"
       @f.puts "Started"
     end
     
+    # Marks about each SuiteResult.
     def mark_results(results)
       @f.puts results.map{|r| r.char }.join('')
     end
     
+    # Marks about each SuiteResult and refers to more details
+    # (test-executing-used time).
     def mark_results_with_times(results)
       unless results.empty?
         vals = results.map{|r|
           ["#{r.suite.inspect}:", r.benchmark.real, r.char]
         }
-        w = vals.max_by{|a| a.first.size }.first.size
+        w = vals.map{|a| a.first.size }.max
         fmt = "%-#{w}s %.2f sec: %s"
         result_descriptions = vals.map{|a| fmt % a }
       else
@@ -139,10 +151,12 @@ module TinyTest
       blank
     end
     
+    # After tests are executed, reports about used time.
     def running_times(benchmark)
       @f.puts "Finished in %.6f seconds." % benchmark.real
     end
     
+    # Refers to each error report of SuiteResult and puts them with index.
     def error_reports(not_succeeded_results)
       not_succeeded_results.each_with_index do |r, i|
         blank
@@ -151,6 +165,7 @@ module TinyTest
       end
     end
     
+    # Reports about some test-concerned numbers.
     def counts_report(n_tests, n_assertions, n_failures, n_errors, n_skips)
       @f.puts [
         "#{n_tests} tests",
@@ -162,6 +177,7 @@ module TinyTest
     end
   end
   
+  # A unit of test executing.
   class Suite
     def initialize(testcase, testname)
       @testcase = testcase
@@ -178,6 +194,7 @@ module TinyTest
       "#{testcase.class}##{testname}"
     end
     
+    # Returns SuiteResult.
     def execute
       report = nil
       benchmark = Benchmark.measure{ report = execute_report() }
@@ -195,9 +212,9 @@ module TinyTest
         @testcase.teardown
       end
     rescue Exception => ex
-      filename, = @testcase.method(@testname).source_location
+      filename, = method_location(@testcase, @testname)
       bt = prune_backtrace(ex.backtrace, filename, nil, @testname)
-      location = parse_backtrace(bt.last).take(2).join(':')
+      location = parse_backtrace(bt.last)[0, 2].join(':')
       tag, repo = case ex
         when SkipError then ["Skipped:", [ex.message]]
         when AssertError then ["Failure:", [ex.message]]
@@ -212,6 +229,10 @@ module TinyTest
     # Sometimes, 3rd paren part is omitted by older Ruby1.9.1
     CALLER_RE = /\A(.+):(\d+)(?::in `(.+)'|\Z)/  #'
     
+    def method_location(obj, name)
+      obj.method(name).source_location
+    end
+    
     def parse_backtrace(line)
       fname, lineno, meth = line.match(CALLER_RE).captures
       meth ||= '__unknown__'  #for older Ruby1.9.1
@@ -220,23 +241,26 @@ module TinyTest
     
     def prune_backtrace(org, filename, lineno, method)
       term = [filename, lineno, method]
-      idx = org.index{|b|
-        parse_backtrace(b).zip(term).all?{|e, t| t ? e == t : true }
-      }
-      idx ? org.take(idx.succ) : org
+      org.each_with_index do |b, i|
+        return org[0, i.succ] if parse_backtrace(b).zip(term).all?{|e, t| t ? e == t : true }
+      end
+      org
     end
     
     public
     
+    # Measure assertion count in block.
     def count_assertions(&block)
       state_shunting(:counting, &block)
       @count_table[:counting]
     end
     
+    # To call by assertion methods calling.
     def succ_assertion_count
       @count_table[@state] += 1
     end
     
+    # Bundle more than 1 assertion count to only 1.
     def assertion_count_grouping(&block)
       state_shunting(:grouping, &block)
     ensure
@@ -257,6 +281,7 @@ module TinyTest
   class SuiteResult
     SUCCESS_CHAR = '.'
     
+    # If _report_ was ommited, it means it's succeeded result.
     def initialize(suite, benchmark, report = nil)
       @suite     = suite
       @benchmark = benchmark
@@ -274,16 +299,21 @@ module TinyTest
       super.split(/\s+/).first << "[#{char}]>"
     end
     
+    # Self is succeeded result or not.
     def success?
       @success_p
     end
   end
   
+  # TinyTest's testcase definition is witten as class definition
+  # which inherit this class.
   class TestCase
+    # Write procedures before executing tests.
     def setup
       ;
     end
     
+    # Write procedures after executing tests.
     def teardown
       ;
     end
@@ -292,6 +322,7 @@ module TinyTest
       define_singleton_method(:suite){ suite }
     end
     
+    # Pass examination if _cond_ was evaluated as true.
     def assert(cond, message = nil)
       message ||= "Failed assertion, no message given."
       suite.succ_assertion_count
@@ -302,70 +333,85 @@ module TinyTest
       true
     end
     
+    # Pass examination if _cond_ was evaluated as false.
     def refute(cond, message = nil)
       not assert(!cond, message || "Failed refutation, no message given")
     end
     
+    # Certainty fail to examination.
     def flunk(message = nil)
       assert(false, message || "Epic Fail!")
     end
     
+    # Certainty pass examination.
     def pass(message = nil)
       assert(true)
     end
     
+    # Raise skipping.
     def skip(message = nil)
       raise(SkipError, message || "Skipped, no message given")
     end
     
+    # Pass examination if block returns true.
     def assert_block(message = nil, &block)
       assertion_frame(yield(), message) do
         "Expected block to return a value evaluated as true"
       end
     end
     
+    # Pass examination if block returns false.
     def refute_block(message = nil, &block)
       refutation_frame(yield(), message) do
         "Expected block to return a value evaluated as false"
       end
     end
     
+    # Pass examination if _expected_ equals to _actual_. (by #==)
     def assert_equal(expected, actual, message = nil)
       assertion_frame(expected == actual, message) do
         "Expected #{expected.inspect}, not #{actual.inspect}"
       end
     end
     
+    # Pass examination unless _expected_ equals to _actual_. (by #==)
     def refute_equal(expected, actual, message = nil)
       refutation_frame(expected == actual, message) do
         "Expected #{actual.inspect} to not be equal to #{expected.inspect}"
       end
     end
     
+    # Pass examination if _object_ is an instance of _klass_. (by #instance_of?)
     def assert_instance_of(klass, object, message = nil)
       assertion_frame(object.instance_of?(klass), message) do
         "Expected #{object.inspect} to be an instance of #{klass}"
       end
     end
     
+    # Pass examination unless _object_ is an instance of _klass_. (by #instance_of?)
     def refute_instance_of(klass, object, message = nil)
       refutation_frame(object.instance_of?(klass), message) do
         "Expected #{object.inspect} to not be an instance of #{klass}"
       end
     end
     
+    # Pass examination if _object_ is an instance of a class
+    # which is _klass_ or a subclass of _klass_. (by #kind_of?)
     def assert_kind_of(klass, object, message = nil)
       assertion_frame(object.kind_of?(klass), message) do
         "Expected #{object.inspect} to be a kind of #{klass}"
       end
     end
     
+    # Pass examination unless _object_ is an instance of a class
+    # which is _klass_ or a subclass of _klass_. (by #kind_of?)
     def refute_kind_of(klass, object, message = nil)
       refutation_frame(object.kind_of?(klass), message) do
         "Expected #{object.inspect} to not be a kind of #{klass}"
       end
     end
     
+    # Pass examination if _expected_ matches _actual_. (by =~)
     def assert_match(expected, actual, message = nil)
       cond = assertion_match_test(expected, actual)
       assertion_frame(cond, message) do
@@ -373,6 +419,7 @@ module TinyTest
       end
     end
     
+    # Pass examination unless _expected_ matches _actual_. (by =~)
     def refute_match(expected, actual, message = nil)
       cond = assertion_match_test(expected, actual)
       refutation_frame(cond, message) do
@@ -380,18 +427,21 @@ module TinyTest
       end
     end
     
+    # Pass examination if _object_ is nil. (by #nil?)
     def assert_nil(object, message = nil)
       assertion_frame(object.nil?, message) do
         "Expected #{object.inspect} to be nil"
       end
     end
     
+    # Pass examination unless _object_ is nil. (by #nil?)
     def refute_nil(object, message = nil)
       refutation_frame(object.nil?, message) do
         "Expected #{object.inspect} to not be nil"
       end
     end
     
+    # Pass examination if _expected_ is _actual_ based on object identity. (by #equal?)
     def assert_same(expected, actual, message = nil)
       assertion_frame(expected.equal?(actual), message) do
         sprintf(
@@ -402,24 +452,28 @@ module TinyTest
       end
     end
     
+    # Pass examination unless _expected_ is _actual_ based on object identity. (by #equal?)
     def refute_same(expected, actual, message = nil)
       refutation_frame(expected.equal?(actual), message) do
         "Expected #{expected.inspect} to not be the same as #{actual.inspect}"
       end
     end
     
+    # Pass examination if _object_ is respondable to _method_. (by #respond_to?)
     def assert_respond_to(object, method, message = nil)
       assertion_frame(object.respond_to?(method), message) do
         "Expected #{object.inspect} (#{object.class}) to respond to #{method}"
       end
     end
     
+    # Pass examination unless _object_ is respondable to _method_. (by #respond_to?)
     def refute_respond_to(object, method, message = nil)
       refutation_frame(object.respond_to?(method), message) do
         "Expected #{object.inspect} to not respond to #{method}"
       end
     end
     
+    # Pass examination if _object_ is empty. (by #empty?)
     def assert_empty(object, message = nil)
       suite.assertion_count_grouping do
         assert_respond_to(object, :empty?, message)
@@ -429,6 +483,7 @@ module TinyTest
       end
     end
     
+    # Pass examination unless _object_ is empty. (by #empty?)
     def refute_empty(object, message = nil)
       suite.assertion_count_grouping do
         assert_respond_to(object, :empty?, message)
@@ -438,6 +493,7 @@ module TinyTest
       end
     end
     
+    # Pass examination if _collection_ includes _object_. (by #include?)
     def assert_includes(collection, object, message = nil)
       suite.assertion_count_grouping do
         assert_respond_to(collection, :include?, message)
@@ -447,6 +503,7 @@ module TinyTest
       end
     end
     
+    # Pass examination unless _collection_ includes _object_. (by #include?)
     def refute_includes(collection, object, message = nil)
       suite.assertion_count_grouping do
         assert_respond_to(collection, :include?, message)
@@ -602,7 +659,7 @@ module TinyTest
     end
     
     def describe_exception(ex)
-      bt = ex.backtrace.reject{|s| s.start_with?(__FILE__) }
+      bt = ex.backtrace.reject{|s| i = s.index(__FILE__) and i == 0 }
       [
         "Class: <#{ex.class}>",
         "Message: <#{ex.message}>",
@@ -641,4 +698,5 @@ module TinyTest
   end
 end
 
+require 'tinytest/compat'
 
