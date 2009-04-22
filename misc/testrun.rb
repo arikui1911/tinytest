@@ -10,6 +10,11 @@ class Hoge
 end
 
 class TC_hoge < TinyTest::TestCase
+  def test_hoge
+    hoge = Hoge.new
+    hoge.hoge
+  end
+  
   def test_block
     assert_block{ 123 }
     refute_block{ nil }

@@ -85,7 +85,9 @@ module TinyTest
       each_class do |c|
         next unless @testcase_matcher.call(c)
         c.public_instance_methods(true).each do |name|
-          suites << Suite.new(c.new, name) if @testname_matcher.call(name)
+          next unless @testname_matcher.call(name)
+          name = name.intern if name.respond_to?(:intern)
+          suites << Suite.new(c.new, name)
         end
       end
       suites
@@ -413,7 +415,7 @@ module TinyTest
     
     # Pass examination if _expected_ matches _actual_. (by =~)
     def assert_match(expected, actual, message = nil)
-      cond = assertion_match_test(expected, actual)
+      cond = Util.assertion_match_test(expected, actual)
       assertion_frame(cond, message) do
         "Expected #{expected.inspect} to match #{actual.inspect}"
       end
@@ -421,7 +423,7 @@ module TinyTest
     
     # Pass examination unless _expected_ matches _actual_. (by =~)
     def refute_match(expected, actual, message = nil)
-      cond = assertion_match_test(expected, actual)
+      cond = Util.assertion_match_test(expected, actual)
       refutation_frame(cond, message) do
         "Expected #{expected.inspect} to not match #{actual.inspect}"
       end
@@ -514,7 +516,7 @@ module TinyTest
     end
     
     def assert_in_delta(expected, actual, delta = 0.001, message = nil)
-      expected, actual, delta, message = normalize_in_delta_epsilon_arguments(
+      expected, actual, delta, message = Util.normalize_in_delta_epsilon_arguments(
         expected, actual, delta, message
       )
       gap = (expected - actual).abs
@@ -524,7 +526,7 @@ module TinyTest
     end
     
     def refute_in_delta(expected, actual, delta = 0.001, message = nil)
-      expected, actual, delta, message = normalize_in_delta_epsilon_arguments(
+      expected, actual, delta, message = Util.normalize_in_delta_epsilon_arguments(
         expected, actual, delta, message
       )
       gap = (expected - actual).abs
@@ -534,14 +536,14 @@ module TinyTest
     end
     
     def assert_in_epsilon(a, b, epsilon = 0.001, message = nil)
-      a, b, epsilon, message = normalize_in_delta_epsilon_arguments(
+      a, b, epsilon, message = Util.normalize_in_delta_epsilon_arguments(
         a, b, epsilon, message
       )
       assert_in_delta(a, b, [a, b].min * epsilon, message)
     end
     
     def refute_in_epsilon(a, b, epsilon = 0.001, message = nil)
-      a, b, epsilon, message = normalize_in_delta_epsilon_arguments(
+      a, b, epsilon, message = Util.normalize_in_delta_epsilon_arguments(
         a, b, epsilon, message
       )
       refute_in_delta(a, b, [a, b].min * epsilon, message)
@@ -560,15 +562,15 @@ module TinyTest
     end
     
     def assert_send(send_concerneds, message = nil)
-      assertion_frame(assertion_send_dispatch(*send_concerneds), message) do
-        inspection = assertion_send_inspection(*send_concerneds)
+      assertion_frame(Util.assertion_send_dispatch(*send_concerneds), message) do
+        inspection = Util.assertion_send_inspection(*send_concerneds)
         "Expected #{inspection} to be evaluated as true"
       end
     end
     
     def refute_send(send_concerneds, message = nil)
-      refutation_frame(assertion_send_dispatch(*send_concerneds), message) do
-        inspection = assertion_send_inspection(*send_concerneds)
+      refutation_frame(Util.assertion_send_dispatch(*send_concerneds), message) do
+        inspection = Util.assertion_send_inspection(*send_concerneds)
         "Expected #{inspection} to be evaluated as false"
       end
     end
@@ -576,13 +578,13 @@ module TinyTest
     RAISES_MSG_HOOK = lambda{|msg| msg.sub(/\.\Z/, '') }
     
     def assert_raises(exceptions, message = nil, &block)
-      exceptions = normalize_raises_arguments(exceptions, &block)
+      exceptions = Util.normalize_raises_arguments(exceptions, &block)
       begin
         yield()
       rescue Exception => actual
         cond = exceptions.any?{|e| actual.kind_of?(e) }
         assertion_frame(cond, message, RAISES_MSG_HOOK) do
-          "#{exceptions.inspect} expected, but\n#{describe_exception(actual)}"
+          "#{exceptions.inspect} expected, but\n#{Util.describe_exception(actual)}"
         end
       else
         assertion_frame(false, message, RAISES_MSG_HOOK) do
@@ -592,13 +594,13 @@ module TinyTest
     end
     
     def refute_raises(exceptions, message = nil, &block)
-      exceptions = normalize_raises_arguments(exceptions, &block)
+      exceptions = Util.normalize_raises_arguments(exceptions, &block)
       begin
         yield()
       rescue Exception => actual
         cond = exceptions.any?{|e| actual.kind_of?(e) }
         refutation_frame(cond, message, RAISES_MSG_HOOK) do
-          "#{exceptions.inspect} not expected, but\n#{describe_exception(actual)}"
+          "#{exceptions.inspect} not expected, but\n#{Util.describe_exception(actual)}"
         end
       end
     end
@@ -626,73 +628,75 @@ module TinyTest
     
     private
     
-    def assertion_match_test(expected, actual)
-      expected =~ actual
-    rescue TypeError
-      /#{Regexp.escape(expected)}/ =~ actual
-    end
-    
-    def normalize_in_delta_epsilon_arguments(expected, actual, delta, message)
-      unless message
-        begin
-          delta = Float(delta)
-        rescue TypeError, ArgumentError
-          delta, message = 0.001, delta
-        end
-      end
-      return expected, actual, Float(delta), message
-    end
-    
-    def assertion_send_dispatch(receiver, message, *args)
-      receiver.__send__(message, *args)
-    end
-    
-    def assertion_send_inspection(receiver, message, *args)
-      "#{receiver.inspect}.#{message}(#{args.map{|e| e.inspect }.join(', ')})"
-    end
-    
-    def normalize_raises_arguments(exceptions, &block)
-      exceptions = [*exceptions]
-      raise ArgumentError, "wrong number of arguments(0 for 1)" if exceptions.empty?
-      raise LocalJumpError, "no block given (yield)" unless block_given?
-      exceptions
-    end
-    
-    def describe_exception(ex)
-      bt = ex.backtrace.reject{|s| i = s.index(__FILE__) and i == 0 }
-      [
-        "Class: <#{ex.class}>",
-        "Message: <#{ex.message}>",
-        "---Backtrace---",
-        bt.join("\n"),
-        "---------------",
-      ].join("\n")
-    end
-    
     def assertion_frame(cond, message, hook = nil, &default_message)
-      assert(cond, build_message(message, hook, &default_message))
+      assert(cond, Util.build_message(message, hook, &default_message))
     end
     
     def refutation_frame(cond, message, hook = nil, &default_message)
-      refute(cond, build_message(message, hook, &default_message))
+      refute(cond, Util.build_message(message, hook, &default_message))
     end
     
-    def build_message(message = nil, hook_end = nil, &default)
-      if message
-        lambda{
-          message = message.to_s
-          message << '.' unless message.empty?
-          message << "\n#{default.call}."
-          message.strip!
-          message = hook_end.call(message) if hook_end
-          message
-        }
-      else
-        lambda{
-          message = "#{default.call}."
-          message = hook_end.call(message) if hook_end
-          message
-        }
+    module Util
+      def self.assertion_match_test(expected, actual)
+        expected =~ actual
+      rescue TypeError
+        /#{Regexp.escape(expected)}/ =~ actual
+      end
+      
+      def self.normalize_in_delta_epsilon_arguments(expected, actual, delta, message)
+        unless message
+          begin
+            delta = Float(delta)
+          rescue TypeError, ArgumentError
+            delta, message = 0.001, delta
+          end
+        end
+        return expected, actual, Float(delta), message
+      end
+      
+      def self.assertion_send_dispatch(receiver, message, *args)
+        receiver.__send__(message, *args)
+      end
+      
+      def self.assertion_send_inspection(receiver, message, *args)
+        "#{receiver.inspect}.#{message}(#{args.map{|e| e.inspect }.join(', ')})"
+      end
+      
+      def self.normalize_raises_arguments(exceptions, &block)
+        exceptions = [*exceptions]
+        raise ArgumentError, "wrong number of arguments(0 for 1)" if exceptions.empty?
+        raise LocalJumpError, "no block given (yield)" unless block_given?
+        exceptions
+      end
+      
+      def self.describe_exception(ex)
+        bt = ex.backtrace.reject{|s| i = s.index(__FILE__) and i == 0 }
+        [
+          "Class: <#{ex.class}>",
+          "Message: <#{ex.message}>",
+          "---Backtrace---",
+          bt.join("\n"),
+          "---------------",
+        ].join("\n")
+      end
+      
+      def self.build_message(message = nil, hook_end = nil, &default)
+        if message
+          lambda{
+            message = message.to_s
+            message << '.' unless message.empty?
+            message << "\n#{default.call}."
+            message.strip!
+            message = hook_end.call(message) if hook_end
+            message
+          }
+        else
+          lambda{
+            message = "#{default.call}."
+            message = hook_end.call(message) if hook_end
+            message
+          }
+        end
       end
     end
   end

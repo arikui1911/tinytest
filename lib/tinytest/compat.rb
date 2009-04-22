@@ -1,11 +1,11 @@
 unless Method.method_defined?(:source_location)
-  class Method
-    def method_added(name)
+  class TinyTest::TestCase
+    def self.method_added(name)
       filename, lineno = caller[0].match(TinyTest::Suite::CALLER_RE).captures
       lineno = Integer(lineno)
       TinyTest::Suite::METHOD_ADDED_RECORDS[[self, name]] = [filename, lineno]
     end
-    private :method_added
+    private_class_method :method_added
   end
   
   class TinyTest::Suite
